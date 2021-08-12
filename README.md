@@ -25,7 +25,7 @@ ROM: 64 GB
 
 1) Тащим сам Das U-BOOT
       
-      ftp://ftp.denx.de/pub/u-boot/u
+      ftp://ftp.denx.de/pub/u-boot/
       
       wget ftp://ftp.denx.de/pub/u-boot/u-boot-1.3.2.tar.bz2
 
