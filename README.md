@@ -41,7 +41,7 @@ ROM: 64 GB
 
 2.3) Понадобится "пакет" ccache. 
 
-      root# apt reinstall ccache
+      root# apt install ccache
 
 Так же понадобится кросс-компилятор для arm64
 
