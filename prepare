@@ -9,3 +9,188 @@ https://www.gentoo.org/downloads/
 https://wiki.gentoo.org/wiki/Handbook:Alpha
 https://wiki.gentoo.org/wiki/Handbook:AMD64
 open-rc
+
+
+https://gist.github.com/brianredbeard/36f5bc52f8e8602b8ac0fcbd8bacc4e3
+============================================================================
+QEMU arm64 cloud server emulation
+=================================
+
+This is basically a rehash of an original [post on CNXSoft](http://www.cnx-software.com/2016/05/10/how-to-run-ubuntu-16-04-aarch64-64-bit-arm-cloud-images-on-your-intelamd-linux-computer/) - all credit (particularly for the Virtio device arguments used below) belongs to the author of that piece.
+
+Download the latest `uefi1.img` image. E.g. [`ubuntu-16.04-server-cloudimg-arm64-uefi1.img`](https://cloud-images.ubuntu.com/releases/16.04/release/ubuntu-16.04-server-cloudimg-arm64-uefi1.img) from <https://cloud-images.ubuntu.com/releases/16.04/release/>
+
+Download the UEFI firmware image `QEMU_EFI.fd` from <https://releases.linaro.org/components/kernel/uefi-linaro/latest/release/qemu64/>
+
+Determine your current username and get your current ssh public key:
+
+```text
+$ whoami
+ghawkins
+$ cat ~/.ssh/id_rsa.pub 
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC...
+```
+
+Use these values to create a `cloud.txt` file replacing the username, here shown as `ghawkins`, and the `ssh-rsa` value with the values appropriate for you:
+
+```text
+$ cat > cloud.txt << EOF
+#cloud-config
+users:
+  - name: ghawkins
+    ssh-authorized-keys:
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC...
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    groups: sudo
+    shell: /bin/bash
+EOF
+```
+
+Important: the `#cloud-config` line above is not a comment and things will fail silently without it.
+
+Cread a cloud-config disk image:
+
+    $ cloud-localds --disk-format qcow2 cloud.img cloud.txt
+
+Note: by default `cloud-localds` creates a raw image and QEMU now complains at having to guess about such an image so use `--disk-format qcow2` to specify a well defined format that QEMU can easily consume.
+
+Backup your image:
+
+    $ cp ubuntu-16.04-server-cloudimg-arm64-disk1.img ubuntu-16.04-server-cloudimg-arm64-disk1.img.orig
+
+The QEMU launch command is somewhat more complex than for e.g. a fully virtualized, rather than emulated, setup with an x86_64 guest running on an x86_64 host.
+
+Here is the command first:
+
+```text
+$ qemu-system-aarch64 \
+    -smp 2 \
+    -m 1024 \
+    -M virt \
+    -cpu cortex-a57 \
+    -bios QEMU_EFI.fd \
+    -nographic \
+    -device virtio-blk-device,drive=image \
+    -drive if=none,id=image,file=ubuntu-16.04-server-cloudimg-arm64-uefi1.img \
+    -device virtio-blk-device,drive=cloud \
+    -drive if=none,id=cloud,file=cloud.img \
+    -device virtio-net-device,netdev=user0 \
+    -netdev user,id=user0 \
+    -redir tcp:2222::22
+```
+
+You'll have to change `ubuntu-16.04-server-cloudimg-arm64-uefi1.img` if you downloaded a later image with a different name.
+
+Now let's look at the arguments that configure our system:
+
+* `-smp 2` - 2 (virtual) cores.
+* `-m 1024` - 1024MB of system memory.
+* `-M virt` - emulate a generic QEMU ARM machine.
+* `-cpu cortex-a57` - the CPU model to emulate.
+* `-bios QEMU_EFI.fd` - the BIOS firmware file to use.
+* `-nographic` - output goes to the terminal (rather than opening a graphics capable window).
+* `-device virtio-blk-device,drive=image` - create a Virtio block device called "image".
+* `-drive if=none,id=image,file=ubuntu-16.04-server-cloudimg-arm64-uefi1.img` - create a drive using the "image" device and our cloud server disk image.
+* `-device virtio-blk-device,drive=cloud` - create another Virtio block device called "cloud".
+* `-drive if=none,id=cloud,file=cloud.img` - create a drive using the "cloud" device and our cloud-config disk image.
+* `-device virtio-net-device,netdev=user0` - create a Virtio network device called "user0"
+* `-netdev user,id=user0` - create a user mode network stack using device "user0"
+* `-redir tcp:2222::22` - map port 2222 on the host to port 22 (the standard ssh port) on the guest.
+
+Here we create a generic QEMU ARM machine. You can see a complete list of possible ARM machines like so:
+
+```text
+$ qemu-system-aarch64 -M help
+akita                Sharp SL-C1000 (Akita) PDA (PXA270)
+...
+z2                   Zipit Z2 (PXA27x)
+```
+
+This list seems to include all ARM machines, not just 64-bit ones. The latest versions of QEMU (but not the one that currently comes with Ubuntu 16.04 LTS) include the well know Raspberry Pi 2 (but not the 3).
+
+For a given machine you can then see the supported processors:
+
+```text
+$ qemu-system-aarch64 -M virt -cpu help
+ arm1026
+ ...
+ ti925t
+```
+
+Once you run the command up above to launch an emulated ARM64 machine it will take a few minutes to boot and will output something like the following:
+
+```text
+error: no suitable video mode found.
+EFI stub: Booting Linux Kernel...
+EFI stub: Using DTB from configuration table
+EFI stub: Exiting boot services and installing virtual address map...
+[    0.000000] Booting Linux on physical CPU 0x0
+[    0.000000] Initializing cgroup subsys cpuset
+```
+
+The initial error, about "no suitable video mode found", can be ignored - we specifically set `-nographic`.
+
+Eventually a login prompt will appear - which cannot be used as in our cloud-config file we only specified key based ssh login.
+
+Depending on how fast various jobs (kicked off during the boot process) run further output will appear after the login prompt appears. 
+
+The first time you launch a given system you should see output confirming that the ssh key specified up above has been installed.
+
+And eventually you should see something like:
+
+    [  220.784509] cloud-init[1358]: Cloud-init v. 0.7.8 finished at ...
+
+Now in another terminal you can log in to the newly launched cloud server:
+
+    $ ssh -p 2222 ghawkins@localhost
+
+If all goes well you'll log straight in without any username or password.
+
+If you've started previous QEMU images in a similar manner then ssh may issue a dire warning like so (and refuse to login):
+
+```text
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!
+```
+
+To resolve this and remove previous details:
+
+    $ ssh-keygen -f ~/.ssh/known_hosts -R '[localhost]:2222'
+
+When logged into the cloud server you can...
+
+* Confirm that it's an `aarch64` system:
+
+```text
+$ uname -a
+Linux ubuntu 4.4.0-59-generic #80-Ubuntu SMP Fri Jan 6 17:37:14 UTC 2017 aarch64 aarch64 aarch64 GNU/Linux
+```
+
+* Has two cores:
+
+```text
+$ cat /proc/cpuinfo
+processor   : 0
+...
+
+processor   : 1
+...
+```
+
+* Shut it down:
+
+```text
+$ sudo shutdown now
+```
+
+In the original terminal (where you launched `qemu-system-aarch64`) you can follow the shutdown process.
+
+Note: when running `sudo shutdown now` the shutdown succeeds but the following error appears:
+
+    sudo: unable to resolve host ubuntu
+
+You'll see this anytime you run `sudo` - to resolve it (as per [Ask Ubuntu](http://askubuntu.com/q/59458)) just edit `/etc/hosts` and add `ubuntu` at the end of the existing line for the address `127.0.0.1` so you end up with something like:
+
+    127.0.0.1 localhost ubuntu
